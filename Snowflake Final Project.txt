@@ -1,0 +1,174 @@
+                                                          Snowflake Final Project
+
+                                                                           
+
+1  SECTION 1 : DATA LOAD UNLOAD :-
+2 
+3  CREATE OR REPLACE TABLE SALES_DBA.SALES_SCH.SALES_DATA (
+4               REGION VARCHAR(16777216), 
+5               COUNTRY VARCHAR(16777216), 
+6               ITEM_TYPE VARCHAR(16777216), 
+7               SALES_CHANNEL VARCHAR(16777216), 
+8               ORDER_PRIORITY VARCHAR(16777216), 
+9               ORDER_DATE DATE, 
+10              ORDER_ID NUMBER(30,0), 
+11              SHIP_DATE DATE, 
+12              UNITS_SOLD NUMBER(30,0), 
+13              UNIT_PRICE NUMBER(30,0), 
+14              UNIT_COST NUMBER(30,0), 
+15              TOTAL_REVENUE NUMBER(30,0), 
+16              TOTAL_COST NUMBER(30,0), 
+17              TOTAL_PROFIT NUMBER(30,0)
+18  );
+19
+20  SELECT * FROM SALES_DBA.SALES_SCH.SALES_DATA;
+21
+22  CREATE FILE FORMAT sales_dba.sales_sch.file_format 
+23  TYPE ='CSV' 
+24  COMPRESSION ='AUTO' 
+25  FIELD_DELIMITER =',' 
+26  RECORD_DELIMITER ='\n' 
+27  SKIP_HEADER = 1
+28
+29
+30  COPY INTO "SALES_DBA"."SALES_SCH"."SALES_DATA" 
+31  FROM '@"SALES_DBA"."SALES_SCH"."%SALES_DATA"/__snowflake_files__/Sales_Data.csv' FILE_FORMAT = (TYPE=CSV, SKIP_HEADER=1, FIELD_DELIMITER=',', TRIM_SPACE=FALSE, FIELD_OPTIONALLY_ENCLOSED_BY=NONE, DATE_FORMAT=AUTO, TIME_FORMAT=AUTO, TIMESTAMP_FORMAT=AUTO) ON_ERROR=ABORT_STATEMENT PURGE=TRUE;
+32
+33
+34  SELECT * FROM SALES_DBA.SALES_SCH.SALES_DATA;
+35  
+36  CREATE OR REPLACE STAGE sale_stage;
+37
+38
+39  COPY INTO @sales_satage 
+40  FROM SALES_DBA.SALES_SCH.SALES_DATA
+41  
+42  partition by Region
+43
+44
+45  File_Format='SALES_DBA.SALES_SCH.FILE_FORMAT';
+46  list @sale_stage;
+47
+48  truncate table SALES_DATA;
+49
+50
+51
+52  SECTION 2 : TRANSFORMATION :-
+53
+54
+55  
+56  CREATE OR REPLACE TABLE AGG_SALES_BY_COUNTRY (
+57               REGION VARCHAR(16777216),
+58               COUNTRY VARCHAR(16777216), 
+59               TOTAL_PROFIT NUMBER (30,0)
+60  );
+61
+62  
+63  COPY INTO AGG_SALES_BY_COUNTRY(Region,Country,Total_Profit) 
+64  FROM (select $1,$2,$14 from @sale_stage);
+65
+66
+67  SELECT * FROM SALES_DBA.SALES_SCH.AGG_SALES_BY_COUNTRY;
+68  
+69  SELECT region, country, sum(total_profit) as Agg_profit 
+70  FROM SALES_DBA.SALES_SCH.AGG_SALES_BY_COUNTRY 
+71  GROUP BY region, country;
+72
+73  COPY INTO sales_data from @sale_stage;
+74
+75  SELECT * FROM SALES_DATA 
+76  ORDER BY order_priority DESC;
+77
+78
+79
+80  SECTION 3 : CLUSTERING :-
+81
+82
+83  SELECT COUNT(order_Id) As totalorders 
+84  FROM SALES_DBA.SALES_SCH.sales_data 
+85  WHERE region = 'Asia;   ------(total orders- 7348, QUERY duration- 100MS), (After clustering query duration- 42 MS)
+86  
+87  ALTER TABLE SALES_DBA.SALES_SCH.sales_data 
+88  CLUSTER BY (region); 
+89
+90
+91  SECTION 4 : TASKS :-
+92
+93
+94  CREATE OR REPLACE TABLE SALES_DBA.SALES_SCH.new_data(
+95               REGION VARCHAR(16777216), 
+96               COUNTRY VARCHAR(16777216), 
+97               ITEM_TYPE VARCHAR(16777216), 
+98               SALES_CHANNEL VARCHAR(16777216), 
+99               ORDER_PRIORITY VARCHAR(16777216), 
+100              ORDER_DATE DATE, 
+101              ORDER_ID NUMBER(30,0),
+102              SHIP_DATE DATE, 
+103              UNITS_SOLD NUMBER(30,0), 
+104              UNIT_PRICE NUMBER(30,0), 
+105              UNIT_COST NUMBER (30,0), 
+106              TOTAL_REVENUE NUMBER(30,0), 
+107              TOTAL_COST NUMBER(30,0), 
+108              TOTAL_PROFIT NUMBER (30,0)
+109  );
+110
+111  CREATE OR REPLACE task task1
+112  warehouse= Abdul_Waseef
+113  schedule= 'using cron * * * * 1-6 UTC'
+114  AS
+115  INSERT INTO new_data(SELECT * FROM SALES_DBA.SALES_SCH.SALES_DATA);
+116
+117  ALTER task task1 resume;
+118
+119  CREATE OR REPLACE TABLE SALES_DBA.SALES_SCH.new2_data (
+120               REGION VARCHAR(16777216), 
+121               COUNTRY VARCHAR(16777216), 
+122               TOTAL_PROFIT NUMBER(30,0)
+123  );
+124
+125  CREATE OR REPLACE task task2
+126  warehouse= Abdul_Waseef
+127  schedule='using cron * 4 * * 1,4 UTC'
+128  AS
+129  INSERT INTO new2_data(select * from SALES_DBA.SALES_SCH.AGG_SALES_BY_COUNTRY);
+130
+131  Alter task task2 resume;
+132
+133
+134  SECTION 5 : DATA SHARING :-
+135
+136
+137  CREATE MANAGED ACCOUNT Reader_Ind admin_name='Abdul', admin_password='Abdulindia@357', type=reader, comment='';
+138
+139  CREATE MANAGED ACCOUNT Reader_Germany admin_name='Anthony', admin_password='Anthonygermany@987', type=reader,comment='';
+140
+141  CREATE TABLE indian_data AS (SELECT * FROM sales_dba.sales_sch.sales_data WHERE country='India');
+142
+143  CREATE TABLE germany_data as (SELECT * FROM sales_dba.sales_sch.sales_data WHERE country='Germany');
+144
+145
+146  CREATE OR REPLACE share share1;
+147
+148
+149  grant usage on DATABASE sales_database to share share1;
+150  grant usage on schema sales_schema to share share1;
+151  grant select on table indian_data to share share1;
+152
+153  ALTER share share1 add account=<particular account number>;
+154
+155  
+156  create database sales_data from share <particular account number>.share1;
+157
+158  CREATE OR REPLACE share share2;
+159
+160  grant usage on DATABASE sales_database to share share2 ; 
+161  grant usage on schema sales_schema to share share2;
+162  grant select on table Germany_data to share share2;
+163
+164  ALTER share share2 add account=<particular account number>;
+165
+166
+167  create database sales_data from share <particular account number>.share2;
+168
+169
+170
